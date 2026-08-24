@@ -1358,6 +1358,7 @@ impl MissionControlOverlay {
                 display_uuid: String::new(),
                 name: None,
                 space: None,
+                is_builtin: false,
             },
             self.scale,
             self.coordinate_converter,

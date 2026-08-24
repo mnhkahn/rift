@@ -110,6 +110,16 @@ pub struct ResolvedWindow {
     pub(crate) effects: AppRuleEffects,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WorkspaceDisplayMove {
+    pub(crate) source_space: SpaceId,
+    pub(crate) target_space: SpaceId,
+    pub(crate) target_screen_size: CGSize,
+    pub(crate) window: WindowId,
+    pub(crate) target_workspace_index: usize,
+    pub(crate) focus_target: bool,
+}
+
 #[derive(Debug, Default)]
 struct WindowRemovalImpact {
     active_space: Option<SpaceId>,
@@ -3255,6 +3265,153 @@ impl LayoutEngine {
             changed: true,
             raise_windows: vec![window_id],
             focus_window: Some(window_id),
+            boundary_hit: None,
+        }
+    }
+
+    pub(crate) fn move_window_to_workspace_index_on_space(
+        &mut self,
+        window_store: &mut WindowStore,
+        request: WorkspaceDisplayMove,
+    ) -> EventResponse {
+        let WorkspaceDisplayMove {
+            source_space,
+            target_space,
+            target_screen_size,
+            window: window_id,
+            target_workspace_index,
+            focus_target,
+        } = request;
+        let Some(target_workspace_id) = self
+            .virtual_workspace_manager
+            .workspace_at(target_space, target_workspace_index)
+        else {
+            return EventResponse::default();
+        };
+        if source_space == target_space {
+            return EventResponse::default();
+        }
+
+        let _ = self.virtual_workspace_manager.list_workspaces(source_space);
+        let source_workspace = self
+            .virtual_workspace_manager
+            .workspace_for_window(window_store, source_space, window_id)
+            .or_else(|| self.virtual_workspace_manager.active_workspace(source_space));
+        let Some(source_workspace_id) = source_workspace else {
+            return EventResponse::default();
+        };
+
+        if matches!(
+            self.workspace_tree(source_workspace_id),
+            LayoutSystemKind::Floating(_)
+        ) || matches!(
+            self.workspace_tree(target_workspace_id),
+            LayoutSystemKind::Floating(_)
+        ) {
+            self.floating.remove_floating(window_id);
+        }
+        let was_floating = self.floating.is_floating(window_id);
+        let was_focused = self.focused_window == Some(window_id);
+
+        if was_floating {
+            self.floating.remove_active_for_window(window_id);
+        } else {
+            self.remove_window_from_all_tiling_trees(window_id);
+        }
+
+        if !self.virtual_workspace_manager.assign_window_to_workspace(
+            window_store,
+            target_space,
+            window_id,
+            target_workspace_id,
+        ) {
+            if was_floating {
+                self.floating.add_active(source_space, window_id.pid, window_id);
+            } else if let Some(source_layout) =
+                self.workspace_layouts.active(source_space, source_workspace_id)
+            {
+                self.workspace_tree_mut(source_workspace_id)
+                    .add_window_after_selection(source_layout, window_id);
+            }
+            return EventResponse::default();
+        }
+
+        if was_floating {
+            self.floating_positions.remove_window(window_id);
+        }
+        self.ensure_workspace_layouts(target_space, target_screen_size);
+
+        let activated_target = focus_target
+            && self.virtual_workspace_manager.active_workspace(target_space)
+                != Some(target_workspace_id)
+            && self
+                .virtual_workspace_manager
+                .set_active_workspace(target_space, target_workspace_id);
+        let target_is_active = self.virtual_workspace_manager.active_workspace(target_space)
+            == Some(target_workspace_id);
+        if was_floating {
+            if target_is_active {
+                self.floating.add_active(target_space, window_id.pid, window_id);
+                if focus_target {
+                    self.floating.set_last_focus(Some(window_id));
+                }
+            }
+        } else if let Some(target_layout) =
+            self.workspace_layouts.active(target_space, target_workspace_id)
+        {
+            self.workspace_tree_mut(target_workspace_id)
+                .add_window_after_selection(target_layout, window_id);
+        }
+        if activated_target {
+            self.update_active_floating_windows(window_store, target_space);
+            self.broadcast_workspace_changed(target_space);
+        }
+
+        if was_focused {
+            self.focused_window = None;
+        }
+        if self
+            .virtual_workspace_manager
+            .last_focused_window(source_space, source_workspace_id)
+            == Some(window_id)
+        {
+            self.virtual_workspace_manager.set_last_focused_window(
+                source_space,
+                source_workspace_id,
+                None,
+            );
+        }
+
+        let replacement_focus = (!focus_target && was_focused)
+            .then(|| {
+                self.virtual_workspace_manager
+                    .active_workspace(source_space)
+                    .filter(|workspace| *workspace == source_workspace_id)
+                    .and_then(|workspace| {
+                        self.preferred_focus_for_workspace(
+                            window_store,
+                            source_space,
+                            workspace,
+                            None,
+                        )
+                    })
+            })
+            .flatten();
+        if focus_target {
+            self.virtual_workspace_manager.set_last_focused_window(
+                target_space,
+                target_workspace_id,
+                Some(window_id),
+            );
+            self.focused_window = Some(window_id);
+        }
+
+        self.broadcast_windows_changed(window_store, source_space);
+        self.broadcast_windows_changed(window_store, target_space);
+        EventResponse {
+            changed: true,
+            raise_windows: focus_target.then_some(window_id).into_iter().collect(),
+            focus_window: focus_target.then_some(window_id).or(replacement_focus),
             boundary_hit: None,
         }
     }

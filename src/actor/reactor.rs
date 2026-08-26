@@ -374,6 +374,11 @@ pub enum Event {
     #[serde(skip)]
     MissionControlNativeExited,
 
+    #[serde(skip)]
+    CommandPaletteSnapshotRequested {
+        generation: u64,
+    },
+
     /// A raise request completed. Used by the raise manager to track when
     /// all raise requests in a sequence have finished.
     RaiseCompleted {
@@ -456,6 +461,7 @@ impl Reactor {
         broadcast_tx: BroadcastSender,
         menu_tx: menu_bar::Sender,
         border_tx: border::Sender,
+        command_palette_tx: crate::actor::command_palette::Sender,
         stack_line_tx: stack_line::Sender,
         window_notify: Option<(crate::actor::window_notify::Sender, WindowTxStore)>,
         one_space: bool,
@@ -477,6 +483,7 @@ impl Reactor {
         reactor.communication_manager.input_tx = Some(input_tx);
         reactor.presentation_manager.menu_tx = Some(menu_tx);
         reactor.presentation_manager.border_tx = Some(border_tx);
+        reactor.presentation_manager.command_palette_tx = Some(command_palette_tx);
         reactor.communication_manager.stack_line_tx = Some(stack_line_tx);
         reactor.communication_manager.events_tx = Some(events_tx_clone.clone());
         let query_handle = ReactorQueryHandle::new(events_tx_clone.clone());
@@ -550,6 +557,7 @@ impl Reactor {
             presentation_manager: managers::PresentationManager {
                 menu_tx: None,
                 border_tx: None,
+                command_palette_tx: None,
                 projections: crate::model::projection::ProjectionHub::default(),
                 transaction_depth: 0,
             },
@@ -1091,6 +1099,15 @@ impl Reactor {
             self.handle_query_request(req);
             return;
         }
+        if let Event::CommandPaletteSnapshotRequested { generation } = event {
+            if let Some(tx) = self.presentation_manager.command_palette_tx.as_ref() {
+                tx.send(crate::actor::command_palette::Event::Snapshot {
+                    generation,
+                    snapshot: self.query_command_palette(),
+                });
+            }
+            return;
+        }
         if let Event::MouseMoved(wsid) = &event {
             self.refresh_quarantine_manager.suppress_auto_workspace_switch_until_input = false;
             if let Some(window) = self.state.windows.tracked_window_id(*wsid)
@@ -1302,6 +1319,7 @@ impl Reactor {
             event,
             Event::DragMotion(..)
                 | Event::Query(..)
+                | Event::CommandPaletteSnapshotRequested { .. }
                 | Event::InstallIpc(..)
                 | Event::RegisterWmSender(..)
                 | Event::MenuOpened(..)
@@ -2169,18 +2187,23 @@ impl Reactor {
                 return Ok(self.handle_unmanaged_focus_command(unmanaged_focus::Action::Cycle));
             }
             Event::Command(Command::Reactor(ReactorCommand::ShowMissionControlAll)) => {
-                return command_workflow::handle_mission_control_command(
+                return command_workflow::handle_wm_command(
                     crate::actor::wm_controller::WmCmd::ShowMissionControlAll,
                 );
             }
             Event::Command(Command::Reactor(ReactorCommand::ShowMissionControlCurrent)) => {
-                return command_workflow::handle_mission_control_command(
+                return command_workflow::handle_wm_command(
                     crate::actor::wm_controller::WmCmd::ShowMissionControlCurrent,
                 );
             }
             Event::Command(Command::Reactor(ReactorCommand::DismissMissionControl)) => {
-                return command_workflow::handle_mission_control_command(
+                return command_workflow::handle_wm_command(
                     crate::actor::wm_controller::WmCmd::DismissMissionControl,
+                );
+            }
+            Event::Command(Command::Reactor(ReactorCommand::ToggleCommandPalette)) => {
+                return command_workflow::handle_wm_command(
+                    crate::actor::wm_controller::WmCmd::ToggleCommandPalette,
                 );
             }
             Event::Command(Command::Reactor(ReactorCommand::CloseWindow { window_server_id })) => {

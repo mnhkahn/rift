@@ -94,6 +94,7 @@ pub enum WmCmd {
     ShowMissionControlCurrent,
     DismissMissionControl,
     ToggleCommandPalette,
+    ToggleCommandPaletteCommands,
     CloseWindow,
 }
 
@@ -420,6 +421,11 @@ impl WmController {
             Command(Wm(ToggleCommandPalette)) => {
                 if let Some(tx) = &self.command_palette_tx {
                     tx.send(command_palette::Event::Toggle);
+                }
+            }
+            Command(Wm(ToggleCommandPaletteCommands)) => {
+                if let Some(tx) = &self.command_palette_tx {
+                    tx.send(command_palette::Event::ToggleCommands);
                 }
             }
             Command(Wm(CloseWindow)) => {

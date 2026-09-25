@@ -532,6 +532,24 @@ impl MasterStackLayoutSystem {
         let _ = self.inner.swap_windows(layout, master_wid, stack_wid);
     }
 
+    pub fn cycle_master(&mut self, layout: LayoutId) -> Option<WindowId> {
+        if !self.has_valid_structure(layout) {
+            let _ = self.ensure_structure(layout);
+        }
+        let windows = self.windows_in_layout_by_container(layout);
+        let (&current_master, remaining) = windows.split_first()?;
+        let &next_master = remaining.first()?;
+
+        for &window in remaining {
+            let swapped = self.inner.swap_windows(layout, current_master, window);
+            debug_assert!(swapped, "master-stack window index became inconsistent");
+            if !swapped {
+                return None;
+            }
+        }
+        self.inner.select_window(layout, next_master).then_some(next_master)
+    }
+
     pub(crate) fn collect_group_containers_in_selection_path(
         &self,
         layout: LayoutId,
@@ -1049,6 +1067,54 @@ mod tests {
         assert_eq!(system.inner.tree.data.layout.info[master].size, resized);
         system.resize_selection_by(layout, 0.05, ResizeOrientation::Horizontal);
         assert_ne!(system.inner.tree.data.layout.info[master].size, resized);
+    }
+
+    #[test]
+    fn cycle_master_rotates_windows_and_selects_the_next_master() {
+        let mut settings = MasterStackSettings::default();
+        settings.base.window_insertion_point = Some(WindowInsertionPoint::EndOfTree);
+        let mut system = MasterStackLayoutSystem::new(settings);
+        let layout = system.create_layout();
+        system.add_window_after_selection(layout, w(1));
+        system.add_window_after_selection(layout, w(2));
+        system.add_window_after_selection(layout, w(3));
+
+        let focused = system.cycle_master(layout);
+
+        assert_eq!(
+            (
+                focused,
+                system.selected_window(layout),
+                system.windows_in_layout_by_container(layout),
+            ),
+            (Some(w(2)), Some(w(2)), vec![w(2), w(3), w(1)])
+        );
+    }
+
+    #[test]
+    fn cycle_master_preserves_user_resized_container_sizes() {
+        let mut settings = MasterStackSettings::default();
+        settings.base.window_insertion_point = Some(WindowInsertionPoint::EndOfTree);
+        let mut system = MasterStackLayoutSystem::new(settings);
+        let layout = system.create_layout();
+        system.add_window_after_selection(layout, w(1));
+        system.add_window_after_selection(layout, w(2));
+        system.add_window_after_selection(layout, w(3));
+        let (_root, master, stack) = system.ensure_structure(layout);
+        let selected = system.select_window(layout, w(1));
+        system.resize_selection_by(layout, 0.1, ResizeOrientation::Horizontal);
+        let before = (
+            system.inner.tree.data.layout.info[master].size,
+            system.inner.tree.data.layout.info[stack].size,
+        );
+
+        let _ = system.cycle_master(layout);
+        let after = (
+            system.inner.tree.data.layout.info[master].size,
+            system.inner.tree.data.layout.info[stack].size,
+        );
+
+        assert_eq!((selected, after), (true, before));
     }
 
     #[test]

@@ -14,7 +14,6 @@ use crate::model::projection::{DesktopSnapshot, StateRevision};
 use crate::ui::menu_bar::{MenuAction, MenuIcon};
 use crate::{actor, common};
 
-
 pub enum Event {
     Snapshot(Arc<DesktopSnapshot>),
     ConfigUpdated(Config),

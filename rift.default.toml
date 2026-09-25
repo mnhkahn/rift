@@ -222,7 +222,9 @@ enabled = false
 width = 4.0
 # ARGB color; this default matches the orange used by the local JankyBorders setup
 color = 0xfff37021
-# rounded corner radius in logical points
+# use the target window's WindowServer radius when available
+adaptive_corner_radius = true
+# fallback radius in logical points when adaptive lookup is unavailable
 corner_radius = 10.0
 # render using a 2x backing scale
 hidpi = true
@@ -483,7 +485,7 @@ comb1 = "Alt + Shift"
 
 # the following commands *only* work when the master stack layout is active
 # - adjust_master_ratio = 0.05 / adjust_master_count = 1
-# - promote_to_master / swap_master_stack
+# - promote_to_master / swap_master_stack / cycle_master
 
 # the following commands *only* work when the scrolling layout is active
 # - scroll_strip = { delta = 0.5 }

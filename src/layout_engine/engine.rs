@@ -2393,6 +2393,27 @@ impl LayoutEngine {
                 }
                 EventResponse::default()
             }
+            LayoutCommand::CycleMaster => {
+                self.workspace_layouts.mark_last_saved(space, workspace_id, layout);
+                let focus_window = if let LayoutSystemKind::MasterStack(system) =
+                    self.workspace_tree_mut(workspace_id)
+                {
+                    system.cycle_master(layout)
+                } else {
+                    None
+                };
+                let Some(focus_window) = focus_window else {
+                    return EventResponse::default();
+                };
+                let response = EventResponse {
+                    changed: true,
+                    focus_window: Some(focus_window),
+                    raise_windows: vec![focus_window],
+                    boundary_hit: None,
+                };
+                self.apply_focus_response(window_store, space, workspace_id, layout, &response);
+                response
+            }
             LayoutCommand::ScrollStrip { delta } => {
                 let mut resp = EventResponse::default();
                 if let LayoutSystemKind::Scrolling(system) = self.workspace_tree_mut(workspace_id) {

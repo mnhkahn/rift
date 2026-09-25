@@ -81,6 +81,7 @@ pub enum LayoutCommand {
     },
     PromoteToMaster,
     SwapMasterStack,
+    CycleMaster,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

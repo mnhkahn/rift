@@ -348,6 +348,8 @@ enum LayoutCommands {
     PromoteToMaster,
     /// Swap the first master with the first stack window (master/stack layout only)
     SwapMasterStack,
+    /// Rotate all windows so the next window becomes the focused master
+    CycleMaster,
     /// Swap two windows by window id (`WindowId { pid: ..., idx: ... }`)
     SwapWindows { a: String, b: String },
     /// Scroll the strip by a normalized delta (scrolling layout only)
@@ -1012,6 +1014,9 @@ fn map_layout_command(cmd: LayoutCommands) -> Result<CliCommand, String> {
         LayoutCommands::SwapMasterStack => Ok(CliCommand::Reactor(reactor::Command::Layout(
             LC::SwapMasterStack,
         ))),
+        LayoutCommands::CycleMaster => {
+            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::CycleMaster)))
+        }
         LayoutCommands::SwapWindows { a, b } => Ok(CliCommand::Reactor(reactor::Command::Layout(
             LC::SwapWindows(parse_window_id(&a)?.into(), parse_window_id(&b)?.into()),
         ))),

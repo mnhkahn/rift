@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 use objc2_core_foundation::{CGPoint, CGRect};
 use rift_protocol::StackInfo;
@@ -213,6 +212,7 @@ pub struct RefreshQuarantineManager {
     pub awaiting_post_wake_snapshot: bool,
     pub awaiting_post_session_snapshot: bool,
     pub pending_inventory_refresh: bool,
+    pub topology_rule_recovery_pending: bool,
     /// LoginWindow/AppKit can replay application activations while restoring a
     /// session. Those activations are not user intent and must not drive a
     /// virtual-workspace switch. Explicit input clears this latch.

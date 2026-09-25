@@ -589,6 +589,7 @@ impl Reactor {
                 awaiting_post_wake_snapshot: false,
                 awaiting_post_session_snapshot: false,
                 pending_inventory_refresh: false,
+                topology_rule_recovery_pending: false,
                 suppress_auto_workspace_switch_until_input: false,
             },
             pending_space_change_manager: managers::PendingSpaceChangeManager {
@@ -1101,6 +1102,7 @@ impl Reactor {
             }
             return;
         }
+        #[cfg(any(test, debug_assertions))]
         let high_frequency = matches!(&event, Event::DragMotion(..));
         if let Event::Query(req) = event {
             self.handle_query_request(req);
@@ -1881,14 +1883,22 @@ impl Reactor {
                 let display_churn_active = self.refresh_quarantine_manager.display_churn_active;
                 let releases_display_churn_refresh_quarantine =
                     space_state.releases_display_churn_refresh_quarantine && display_churn_active;
+                let lifecycle_recovery_active =
+                    self.refresh_quarantine_manager.awaiting_post_wake_snapshot
+                        || self.refresh_quarantine_manager.awaiting_post_session_snapshot;
                 let releases_instability = (releases_lifecycle_refresh_quarantine
-                    && (self.refresh_quarantine_manager.awaiting_post_wake_snapshot
-                        || self.refresh_quarantine_manager.awaiting_post_session_snapshot))
+                    && lifecycle_recovery_active)
                     || releases_display_churn_refresh_quarantine;
+                let finishes_instability_recovery = releases_instability
+                    && (!lifecycle_recovery_active || releases_lifecycle_refresh_quarantine)
+                    && (!display_churn_active || releases_display_churn_refresh_quarantine);
                 if releases_instability {
                     self.abandon_window_inventories_from_instability();
                 }
-                let mut outcome = self.handle_authoritative_space_snapshot(space_state)?;
+                let mut outcome = self.handle_authoritative_space_snapshot(
+                    space_state,
+                    finishes_instability_recovery,
+                )?;
                 if releases_lifecycle_refresh_quarantine {
                     self.release_post_instability_quarantine_after_authoritative_snapshot();
                 }
@@ -3209,11 +3219,23 @@ impl Reactor {
     fn handle_authoritative_space_snapshot(
         &mut self,
         space_state: ForwardedSpaceState,
+        finishes_instability_recovery: bool,
     ) -> anyhow::Result<EventOutcome> {
-        let should_reapply_fixed_workspace_rules = (self.space_state.screens.is_empty()
-            && !space_state.screens.is_empty())
-            || space_state.display_set_changed
-            || space_state.topology_window_delta.is_some();
+        let initializes_display_state =
+            self.space_state.screens.is_empty() && !space_state.screens.is_empty();
+        let changes_display_topology =
+            space_state.display_set_changed || space_state.topology_window_delta.is_some();
+        let recovery_active = self.refresh_quarantine_manager.awaiting_post_wake_snapshot
+            || self.refresh_quarantine_manager.awaiting_post_session_snapshot
+            || self.refresh_quarantine_manager.display_churn_active;
+        if changes_display_topology && recovery_active {
+            self.refresh_quarantine_manager.topology_rule_recovery_pending = true;
+        }
+        let finishes_topology_rule_recovery = finishes_instability_recovery
+            && self.refresh_quarantine_manager.topology_rule_recovery_pending;
+        let should_reapply_fixed_workspace_rules = initializes_display_state
+            || changes_display_topology
+            || finishes_topology_rule_recovery;
         let mut outcome = EventOutcome::window_membership_changed(false, true);
         let analysis = topology_workflow::analyze_space_snapshot(
             &self.space_state,
@@ -3334,6 +3356,8 @@ impl Reactor {
         if let Some(delta) = topology_window_delta {
             outcome.absorb(self.apply_topology_window_delta(delta));
         }
+        let active_windows = self.authoritative_active_space_windows();
+        self.finalize_space_change(&spaces, active_windows, releases_lifecycle_refresh_quarantine);
         if should_reapply_fixed_workspace_rules {
             let active_spaces = self.iter_active_spaces().collect::<Vec<_>>();
             self.apply_app_rules_for_spaces(
@@ -3341,8 +3365,9 @@ impl Reactor {
                 AppRuleProcessingMode::ReapplyWorkspace,
             );
         }
-        let active_windows = self.authoritative_active_space_windows();
-        self.finalize_space_change(&spaces, active_windows, releases_lifecycle_refresh_quarantine);
+        if finishes_topology_rule_recovery {
+            self.refresh_quarantine_manager.topology_rule_recovery_pending = false;
+        }
         self.try_apply_pending_space_change();
         if should_force_refresh_layout {
             outcome.refresh_window_inventories = true;
@@ -3357,7 +3382,12 @@ impl Reactor {
                 // During native Mission Control we must preserve the full forwarded snapshot,
                 // not just the raw spaces vector, otherwise command-space and per-display space
                 // metadata can remain stale after exit.
-                if let Ok(outcome) = self.handle_authoritative_space_snapshot(pending) {
+                let finishes_topology_rule_recovery =
+                    self.refresh_quarantine_manager.topology_rule_recovery_pending
+                        && !self.refreshes_blocked();
+                if let Ok(outcome) = self
+                    .handle_authoritative_space_snapshot(pending, finishes_topology_rule_recovery)
+                {
                     self.apply_event_outcome(outcome);
                 }
             } else {

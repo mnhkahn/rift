@@ -1026,6 +1026,55 @@ fn display_topology_change_reapplies_fixed_rule_after_space_reassignment() {
 }
 
 #[test]
+fn recovery_detaches_stale_native_fullscreen_tile() {
+    let mut apps = Apps::new();
+    let mut reactor = test_reactor();
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let space = SpaceId::new(1);
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    apps.make_app_and_settle(&mut reactor, 1, make_windows(2));
+    let tiled = WindowId::new(1, 1);
+    let fullscreen = WindowId::new(1, 2);
+    assert!(laid_out_frame(&mut reactor, space, screen, fullscreen).is_some());
+    let fullscreen_space = SpaceId::new(0x400000001);
+    let _ = reactor.state.windows.suspend_window_to_native_fullscreen(
+        fullscreen,
+        None,
+        Some(space),
+        fullscreen_space,
+        NativeFullscreenTransition::Suspended,
+    );
+
+    // Display recovery during a partial Space transition: the screen reports no
+    // user space while the suspended window's stale tile was never detached.
+    reactor.space_state.fullscreen_spaces.insert(fullscreen_space);
+    reactor.handle_event(space_state_event_with(
+        vec![screen],
+        vec![None],
+        |state| {
+            state.display_set_changed = true;
+            state.fullscreen_spaces.insert(fullscreen_space);
+        },
+    ));
+
+    assert!(
+        laid_out_frame(&mut reactor, space, screen, fullscreen).is_none(),
+        "recovery must detach the stale tile of a suspended native fullscreen window"
+    );
+    assert!(
+        laid_out_frame(&mut reactor, space, screen, tiled).is_some(),
+        "recovery must keep equalizing the remaining tiled siblings"
+    );
+    assert!(
+        reactor
+            .state
+            .windows
+            .is_window_native_fullscreen_suspended(fullscreen),
+        "the native fullscreen track must remain suspended until the real exit observation"
+    );
+}
+
+#[test]
 fn reconnecting_affinity_display_moves_existing_managed_window_back() {
     let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
     settings.app_rules = vec![AppWorkspaceRule {

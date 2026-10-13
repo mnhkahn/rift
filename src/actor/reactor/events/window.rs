@@ -267,6 +267,12 @@ pub fn handle_window_frame_changed(
         screens,
     } = payload;
     let mut outcome = EventOutcome::default();
+    // Fullscreen geometry belongs to macOS. During a Space transition its AX
+    // notifications may still overlap a tiled display; do not turn them into
+    // workspace reassignment or sibling resize operations.
+    if state.windows.is_window_native_fullscreen_suspended(wid) {
+        return Ok(outcome);
+    }
     let Some(window) = state.windows.window(wid) else {
         return Ok(outcome);
     };

@@ -799,6 +799,27 @@ impl Reactor {
         }
     }
 
+    /// Native fullscreen windows can retain a stale tile after a partial Space
+    /// transition during display recovery. Detach the projection before rules are
+    /// reapplied so siblings are equalized without the suspended window.
+    fn detach_stale_native_fullscreen_tiles(&mut self) {
+        let fullscreen_windows: Vec<_> = self
+            .state
+            .windows
+            .iter_native_fullscreen_records()
+            .map(|record| record.current_window_id)
+            .filter(|&wid| {
+                self.layout_manager
+                    .layout_engine
+                    .space_with_window(wid)
+                    .is_some()
+            })
+            .collect();
+        for window in fullscreen_windows {
+            self.send_layout_event(LayoutEvent::WindowRemovedPreserveFloating(window));
+        }
+    }
+
     fn apply_app_rules_for_spaces(&mut self, spaces: &[SpaceId], mode: AppRuleProcessingMode) {
         let target_spaces: HashSet<SpaceId> = spaces.iter().copied().collect();
         let mut windows_by_pid: HashMap<pid_t, Vec<WindowId>> = HashMap::default();
@@ -813,7 +834,9 @@ impl Reactor {
             let Some(state) = self.state.windows.window(wid) else {
                 continue;
             };
-            if !state.can_reconcile_admission() {
+            if !state.can_reconcile_admission()
+                || self.state.windows.is_window_native_fullscreen_suspended(wid)
+            {
                 continue;
             }
             windows_by_pid.entry(wid.pid).or_default().push(wid);
@@ -3391,6 +3414,7 @@ impl Reactor {
             outcome.absorb(self.apply_topology_window_delta(delta));
         }
         if should_reapply_fixed_workspace_rules {
+            self.detach_stale_native_fullscreen_tiles();
             let active_spaces = self.iter_active_spaces().collect::<Vec<_>>();
             self.apply_app_rules_for_spaces(
                 &active_spaces,

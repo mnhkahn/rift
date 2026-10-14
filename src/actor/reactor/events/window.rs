@@ -302,6 +302,21 @@ pub fn handle_window_frame_changed(
         return Ok(outcome);
     }
 
+    // Windows of an inactive virtual workspace are hidden through native tab
+    // groups. The group show/hide transition animates their frames on the same
+    // Space; those notifications are not user resizes and must not rewrite the
+    // tiled sibling weights (a switch away would otherwise leave a thin strip).
+    if old_space == new_space
+        && !layout.layout_engine.is_window_floating(wid)
+        && let Some(workspace_space) = assigned_space.or(old_space)
+        && let Some(workspace) = state.windows.workspace_for_window(workspace_space, wid)
+        && let Some(active_workspace) =
+            layout.layout_engine.workspaces().active_workspace(workspace_space)
+        && active_workspace != workspace
+    {
+        return Ok(EventOutcome::no_change());
+    }
+
     // An adjusted acknowledgement of our own frame write is not a new native drag.
     if matches!(
         drag.actor.kind(),

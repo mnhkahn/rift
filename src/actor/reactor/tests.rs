@@ -2349,6 +2349,95 @@ fn external_resize_requests_one_arrange_pass() {
 }
 
 #[test]
+fn frame_changes_on_inactive_workspace_do_not_rewrite_tiled_weights() {
+    let (mut apps, mut reactor) = test_context();
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1920., 1080.));
+    let space = SpaceId::new(1);
+
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    reactor.handle_events(apps.make_app(1, make_windows(1)));
+    apps.make_app_and_settle(&mut reactor, 2, make_windows(1));
+
+    let left = WindowId::new(1, 1);
+
+    let initial = reactor
+        .query_layout_state(Some(space.get()), None)
+        .expect("active workspace layout state");
+    let workspace_id = initial.workspace_id;
+    let left_tile = initial.container_tree.children[0].frame;
+    let tiled_widths: Vec<f64> = initial
+        .container_tree
+        .children
+        .iter()
+        .map(|node| node.frame.size.width)
+        .collect();
+
+    // Hide the workspace through a virtual workspace switch. The native tab
+    // group transition animates the hidden windows to arbitrary same-Space
+    // frames; those notifications must not be interpreted as external resizes.
+    reactor.handle_test_layout_command(LayoutCommand::SwitchToWorkspace(1));
+    let animated = CGRect::new(CGPoint::new(0., 0.), CGSize::new(47., 1033.));
+    let hidden = reactor
+        .dispatch_workflow(Event::WindowFrameChanged(
+            left,
+            animated,
+            None,
+            Requested(false),
+            Some(MouseState::Up),
+        ))
+        .unwrap();
+    assert_eq!(
+        hidden.arrange.passes, 0,
+        "hidden workspace frame changes must not trigger a resize"
+    );
+    assert!(!hidden.arrange.is_resize);
+
+    // The hidden workspace's tiled weights must survive the transition untouched.
+    let inactive = reactor
+        .query_layout_state(Some(space.get()), Some(workspace_id))
+        .expect("inactive workspace layout state");
+    let surviving_widths: Vec<f64> = inactive
+        .container_tree
+        .children
+        .iter()
+        .map(|node| node.frame.size.width)
+        .collect();
+    let surviving_weights: Vec<f64> = inactive
+        .container_tree
+        .children
+        .iter()
+        .map(|node| node.weight.unwrap_or_default())
+        .collect();
+    assert_eq!(
+        surviving_widths, tiled_widths,
+        "hidden-workspace frame animation must not skew tiled widths"
+    );
+    assert_eq!(
+        surviving_weights,
+        vec![1.0, 1.0],
+        "hidden-workspace frame animation must not rewrite tiled weights"
+    );
+
+    // The same frame change on the visible workspace still behaves as a resize.
+    reactor.handle_test_layout_command(LayoutCommand::SwitchToWorkspace(0));
+    apps.simulate_until_quiet(&mut reactor);
+    let visible = reactor
+        .dispatch_workflow(Event::WindowFrameChanged(
+            left,
+            CGRect::new(
+                CGPoint::new(left_tile.origin.x, left_tile.origin.y),
+                CGSize::new(left_tile.size.width - 40.0, left_tile.size.height),
+            ),
+            None,
+            Requested(false),
+            Some(MouseState::Up),
+        ))
+        .unwrap();
+    assert!(visible.arrange.passes > 0);
+    assert!(visible.arrange.is_resize);
+}
+
+#[test]
 fn crossing_native_spaces_reconciles_membership_with_one_arrange_pass() {
     let (mut reactor, wid, wsid, _space1, space2, frame, screen2) =
         reactor_with_window_on_space1_two_displays();

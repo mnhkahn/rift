@@ -8608,3 +8608,35 @@ fn inventory_observes_only_eligible_omitted_windows() {
     assert_eq!(retired, vec![(windows[1], Some(omitted_wsid))]);
     reactor.state.windows.debug_assert_invariants();
 }
+
+#[test]
+fn emergency_rebalance_survives_unstable_topology_and_resumes_after_snapshot() {
+    let mut reactor = test_reactor();
+    let screen = CGRect::new(CGPoint::ZERO, CGSize::new(1440., 900.));
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(SpaceId::new(1))]));
+    reactor.space_state.authoritative = false;
+    reactor.handle_event(Event::Command(Command::Reactor(
+        ReactorCommand::RebalanceAllWorkspaces,
+    )));
+    assert!(reactor.emergency_recovery_pending);
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(SpaceId::new(1))]));
+    assert!(!reactor.emergency_recovery_pending);
+    assert!(reactor.layout_update_count > 0);
+}
+
+#[test]
+fn emergency_rebalance_reenables_disabled_space() {
+    let mut reactor = test_reactor();
+    let space = SpaceId::new(1);
+    let screen = CGRect::new(CGPoint::ZERO, CGSize::new(1440., 900.));
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    reactor.handle_event(Event::Command(Command::Reactor(
+        ReactorCommand::ToggleSpaceActivated,
+    )));
+    assert!(!reactor.is_space_active(space));
+    reactor.handle_event(Event::Command(Command::Reactor(
+        ReactorCommand::RebalanceAllWorkspaces,
+    )));
+    assert!(reactor.is_space_active(space));
+    assert!(!reactor.emergency_recovery_pending);
+}

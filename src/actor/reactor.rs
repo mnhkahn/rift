@@ -459,6 +459,7 @@ pub struct Reactor {
     pending_space_change_manager: managers::PendingSpaceChangeManager,
     unmanaged_focus_history: unmanaged_focus::History,
     active_spaces: HashSet<SpaceId>,
+    emergency_recovery_pending: bool,
     startup_ready: Option<oneshot::Sender<()>>,
     pub animation_tx: Option<AnimationSender>,
     viewport_gesture: Option<gesture::ViewportSession>,
@@ -598,6 +599,7 @@ impl Reactor {
             },
             unmanaged_focus_history: unmanaged_focus::History::default(),
             active_spaces: HashSet::default(),
+            emergency_recovery_pending: false,
             startup_ready: None,
             animation_tx: None,
             viewport_gesture: None,
@@ -2226,6 +2228,14 @@ impl Reactor {
                 return command_workflow::handle_command_reactor_serialize(serialized);
             }
             Event::Command(Command::Reactor(ReactorCommand::RebalanceAllWorkspaces)) => {
+                self.emergency_recovery_pending = true;
+                if self.refreshes_blocked() || self.is_mission_control_active()
+                    || self.space_activation_policy.login_window_active
+                {
+                    return Ok(EventOutcome::no_change().with_stdout_line(
+                        "Recovery queued until the desktop topology is stable".into(),
+                    ));
+                }
                 let spaces = self
                     .space_state
                     .screens
@@ -2623,7 +2633,43 @@ impl Reactor {
     /// writes, then UI/platform presentation state is refreshed. Broadcast and
     /// discovery requests made directly by a workflow are consequently observed
     /// only after its model mutation is complete.
-    fn apply_event_outcome(&mut self, outcome: EventOutcome) {
+    fn apply_event_outcome(&mut self, mut outcome: EventOutcome) {
+        // An emergency request survives display transitions and Mission Control.
+        // Never manufacture authoritative topology from stale screen information.
+        if self.emergency_recovery_pending
+            && !self.refreshes_blocked()
+            && !self.is_mission_control_active()
+            && !self.space_activation_policy.login_window_active
+        {
+            self.emergency_recovery_pending = false;
+            self.try_apply_pending_space_change();
+            let windows = self.state.windows.iter_windows().map(|(wid, _)| wid).collect();
+            self.cancel_window_presentations(windows);
+            self.abandon_window_inventories_from_instability();
+            let spaces = self.space_state.screens.iter().filter_map(|s| s.space)
+                .filter(|space| !self.is_fullscreen_space(*space)).collect::<Vec<_>>();
+            let cfg = self.activation_cfg();
+            for space in &spaces {
+                if !self.is_space_active(*space) {
+                    self.space_activation_policy.toggle_space_activated(cfg,
+                        crate::model::space_activation::ToggleSpaceContext {
+                            space: *space,
+                            display_uuid: self.display_uuid_for_space(*space),
+                        });
+                }
+            }
+            self.recompute_and_set_active_spaces_from_current_screens();
+            let active_windows = self.authoritative_active_space_windows();
+            self.reconcile_authoritative_active_window_snapshot(active_windows,
+                !self.space_state.membership_complete);
+            self.apply_app_rules_for_spaces(&spaces, AppRuleProcessingMode::ReapplyWorkspace);
+            self.layout_manager.layout_engine.rebalance_all_workspaces(&spaces);
+            outcome.refresh_window_inventories = true;
+            outcome.arrange.passes = outcome.arrange.passes.max(1);
+            outcome.arrange.space_scope = None;
+            outcome.arrange.secondary_space_scope = None;
+        }
+
         #[cfg(test)]
         self.event_outcome_phase_trace.push("model");
         if !outcome.window_server_updates.is_empty() {

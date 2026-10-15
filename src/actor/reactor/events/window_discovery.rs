@@ -197,7 +197,8 @@ pub(crate) struct EmitLayoutPayload<'a> {
     pub(crate) window_spaces: HashMap<WindowId, (Option<SpaceId>, Option<SpaceId>)>,
     pub(crate) active_spaces: Vec<SpaceId>,
     /// Display class of each active space, used by display-restricted app rules.
-    pub(crate) space_display_targets: &'a HashMap<SpaceId, crate::common::config::WorkspaceDisplayTarget>,
+    pub(crate) space_display_targets:
+        &'a HashMap<SpaceId, crate::common::config::WorkspaceDisplayTarget>,
     pub(crate) focused_window: Option<(SpaceId, WindowId)>,
 }
 

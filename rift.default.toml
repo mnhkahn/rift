@@ -359,6 +359,11 @@ workspace_names = [
 #   - title_regex    : regular expression matched against the window title
 #   - title_substring: literal substring (case-sensitive) matched against the title
 #   - ax_role / ax_subrole: exact match against macOS Accessibility (AX) role/subrole
+#   - display ("built_in" | "external_primary"): only match windows on that display
+#     class. Same targets as workspace_display_rules. A window on another external
+#     display does not match "external_primary". When omitted, the rule matches
+#     on every display, e.g. to keep a browser on the laptop display out of a
+#     workspace pinned to the external display.
 #
 # Rule options:
 #   - workspace (integer, 0-based): target workspace index. If omitted or invalid, uses the active workspace.

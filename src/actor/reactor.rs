@@ -3567,7 +3567,7 @@ impl Reactor {
                 (wid, self.discovery_spaces_for_window(wid, native))
             })
             .collect();
-        let active_spaces = self
+        let active_spaces: Vec<SpaceId> = self
             .space_state
             .screens
             .iter()
@@ -3577,6 +3577,11 @@ impl Reactor {
         let focused_window = self
             .focused_window_for_discovery(pid, &window_spaces)
             .filter(|(_, wid)| !has_admitted_windows || new_window_ids.contains(wid));
+        let space_display_targets: HashMap<SpaceId, WorkspaceDisplayTarget> = active_spaces
+            .iter()
+            .copied()
+            .filter_map(|space| Some((space, self.display_target_for_space(space)?)))
+            .collect();
         outcome.absorb(window_discovery::emit_layout_events(
             &mut self.state,
             &mut self.layout_manager,
@@ -3586,6 +3591,7 @@ impl Reactor {
                 app_info: &app_info,
                 window_spaces,
                 active_spaces,
+                space_display_targets: &space_display_targets,
                 focused_window,
             },
         ));
@@ -4353,6 +4359,7 @@ impl Reactor {
                 continue;
             }
             let mut windows_needing_layout_refresh = Vec::new();
+            let space_display = self.display_target_for_space(space);
 
             for wid in &wids {
                 let (previous_workspace, was_floating, was_ignored) = {
@@ -4389,6 +4396,7 @@ impl Reactor {
                         ax_identifier: window_metadata
                             .as_ref()
                             .and_then(|metadata| metadata.3.as_deref()),
+                        display: space_display,
                     };
                     match mode {
                         AppRuleProcessingMode::TitleChange => engine.reapply_window_with_app_info(
@@ -5470,12 +5478,30 @@ impl Reactor {
     fn preferred_screen_for_workspace(&self, workspace_index: usize) -> Option<&ScreenInfo> {
         let target =
             self.config.virtual_workspaces.display_target_for_workspace(workspace_index)?;
+        self.screen_for_display_target(target)
+    }
+
+    fn screen_for_display_target(&self, target: WorkspaceDisplayTarget) -> Option<&ScreenInfo> {
         let ordered = self.screens_in_physical_order();
         match target {
             WorkspaceDisplayTarget::BuiltIn => ordered.into_iter().find(|screen| screen.is_builtin),
             WorkspaceDisplayTarget::ExternalPrimary => {
                 ordered.into_iter().find(|screen| !screen.is_builtin)
             }
+        }
+    }
+
+    /// Classify the display backing a space, using the same target vocabulary as
+    /// `workspace_display_rules`. A secondary external display has no target.
+    fn display_target_for_space(&self, space: SpaceId) -> Option<WorkspaceDisplayTarget> {
+        let screen = self.space_state.screen_by_space(space)?;
+        if screen.is_builtin {
+            Some(WorkspaceDisplayTarget::BuiltIn)
+        } else {
+            let primary_external =
+                self.screen_for_display_target(WorkspaceDisplayTarget::ExternalPrimary)?;
+            (primary_external.id == screen.id)
+                .then_some(WorkspaceDisplayTarget::ExternalPrimary)
         }
     }
 

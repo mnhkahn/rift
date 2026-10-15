@@ -939,6 +939,74 @@ fn app_rule_places_window_on_workspace_affinity_display_without_switching_worksp
 }
 
 #[test]
+fn display_restricted_app_rule_keeps_builtin_window_off_external_display() {
+    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
+    settings.app_rules = vec![AppWorkspaceRule {
+        app_name: Some("TestApp".to_string()),
+        workspace: Some(WorkspaceSelector::Index(1)),
+        display: Some(WorkspaceDisplayTarget::ExternalPrimary),
+        ..Default::default()
+    }];
+    let mut apps = Apps::new();
+    let mut reactor = test_reactor_with_workspace_settings(&settings);
+    reactor.config.virtual_workspaces = settings;
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    reactor.handle_event(space_state_event(vec![builtin, external], vec![
+        Some(builtin_space),
+        Some(external_space),
+    ]));
+    let builtin_active = reactor
+        .layout_manager
+        .layout_engine
+        .workspaces()
+        .active_workspace(builtin_space);
+    let external_target = reactor.test_workspace(external_space, 1);
+
+    // A window opening on the built-in display must not get pulled across:
+    // the rule is scoped to the external display.
+    apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
+    let builtin_window = WindowId::new(1, 1);
+    assert_eq!(
+        reactor.assigned_space_for_window_id(builtin_window),
+        Some(builtin_space)
+    );
+    assert_eq!(
+        reactor.test_workspace_for_window(builtin_space, builtin_window),
+        builtin_active
+    );
+    assert_eq!(
+        reactor.test_workspace_for_window(external_space, builtin_window),
+        None,
+        "the built-in window must never join the external display's tree"
+    );
+    assert!(
+        apps.windows[&builtin_window].frame.origin.x < 1000.,
+        "the built-in window must not receive a cross-display frame move"
+    );
+
+    // The same rule still applies when the window opens on the external display.
+    let external_window_info = vec![make_window_info(
+        CGRect::new(CGPoint::new(1500., 100.), CGSize::new(50., 50.)),
+        None,
+        "Window1",
+        None,
+    )];
+    apps.make_app_and_settle(&mut reactor, 2, external_window_info);
+    let external_window = WindowId::new(2, 1);
+    assert_eq!(
+        reactor.assigned_space_for_window_id(external_window),
+        Some(external_space)
+    );
+    assert_eq!(
+        reactor.test_workspace_for_window(external_space, external_window),
+        Some(external_target)
+    );
+}
+
+#[test]
 fn first_space_activation_reapplies_fixed_rule_to_provisional_workspace_assignment() {
     let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
     settings.app_rules = vec![AppWorkspaceRule {
@@ -5983,6 +6051,7 @@ fn fullscreen_startup_fixture(
             ax_role: None,
             ax_subrole: None,
             ax_identifier_regex: None,
+            display: None,
         }];
     }
 

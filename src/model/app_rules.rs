@@ -4,7 +4,9 @@ use tracing::warn;
 
 use crate::actor::app::WindowId;
 use crate::common::collections::HashMap;
-use crate::common::config::{AppRulePosition, AppRuleSize, AppWorkspaceRule, WorkspaceSelector};
+use crate::common::config::{
+    AppRulePosition, AppRuleSize, AppWorkspaceRule, WorkspaceDisplayTarget, WorkspaceSelector,
+};
 use crate::model::VirtualWorkspaceId;
 use crate::sys::screen::SpaceId;
 
@@ -16,6 +18,9 @@ pub struct WindowRuleContext<'a> {
     pub ax_role: Option<&'a str>,
     pub ax_subrole: Option<&'a str>,
     pub ax_identifier: Option<&'a str>,
+    /// Display class the window is currently observed on. `None` means unknown
+    /// (e.g. tests); a display-restricted rule then cannot match.
+    pub display: Option<WorkspaceDisplayTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -189,6 +194,7 @@ struct CompiledRule {
     ax_role: Option<String>,
     ax_subrole: Option<String>,
     ax_identifier_regex: Option<Regex>,
+    display: Option<WorkspaceDisplayTarget>,
     specificity: usize,
     index: usize,
 }
@@ -276,6 +282,7 @@ impl CompiledRule {
             ax_role,
             ax_subrole,
             ax_identifier_regex,
+            display,
         } = rule;
         let app_id = nonempty(app_id).map(|value| value.to_ascii_lowercase());
         let app_name = nonempty(app_name).map(|value| value.to_lowercase());
@@ -315,6 +322,7 @@ impl CompiledRule {
             ax_role.is_some(),
             ax_subrole.is_some(),
             ax_identifier_regex.is_some(),
+            display.is_some(),
         ]
         .into_iter()
         .filter(|present| *present)
@@ -339,6 +347,7 @@ impl CompiledRule {
             ax_role,
             ax_subrole,
             ax_identifier_regex,
+            display,
             specificity,
             index,
         })
@@ -367,6 +376,9 @@ impl CompiledRule {
             && self.ax_identifier_regex.as_ref().is_none_or(|regex| {
                 context.ax_identifier.is_some_and(|actual| regex.is_match(actual))
             })
+            && self
+                .display
+                .is_none_or(|target| context.display == Some(target))
     }
 }
 
@@ -486,6 +498,77 @@ mod tests {
                     ..Default::default()
                 })
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn display_restricted_rule_matches_only_its_display_class() {
+        let external_rule = AppWorkspaceRule {
+            app_id: Some("com.example.Chrome".into()),
+            workspace: Some(WorkspaceSelector::Index(1)),
+            display: Some(WorkspaceDisplayTarget::ExternalPrimary),
+            ..Default::default()
+        };
+        let engine = AppRuleEngine::new(&[external_rule]);
+
+        let matched = engine
+            .evaluate(WindowRuleContext {
+                app_bundle_id: Some("com.example.Chrome"),
+                display: Some(WorkspaceDisplayTarget::ExternalPrimary),
+                ..Default::default()
+            })
+            .expect("rule matches on the external display");
+        assert_eq!(matched.workspace, Some(WorkspaceSelector::Index(1)));
+
+        for display in [
+            Some(WorkspaceDisplayTarget::BuiltIn),
+            None,
+        ] {
+            assert!(
+                engine
+                    .evaluate(WindowRuleContext {
+                        app_bundle_id: Some("com.example.Chrome"),
+                        display,
+                        ..Default::default()
+                    })
+                    .is_none(),
+                "display-restricted rule must not match {:?}",
+                display
+            );
+        }
+    }
+
+    #[test]
+    fn display_matcher_adds_specificity_but_non_matching_display_falls_back() {
+        let generic = rule("com.example.Chrome", 0);
+        let external_only = AppWorkspaceRule {
+            app_id: Some("com.example.Chrome".into()),
+            workspace: Some(WorkspaceSelector::Index(1)),
+            display: Some(WorkspaceDisplayTarget::ExternalPrimary),
+            ..Default::default()
+        };
+        let engine = AppRuleEngine::new(&[generic, external_only]);
+
+        let external = engine
+            .evaluate(WindowRuleContext {
+                app_bundle_id: Some("com.example.Chrome"),
+                display: Some(WorkspaceDisplayTarget::ExternalPrimary),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(external.workspace, Some(WorkspaceSelector::Index(1)));
+
+        let builtin = engine
+            .evaluate(WindowRuleContext {
+                app_bundle_id: Some("com.example.Chrome"),
+                display: Some(WorkspaceDisplayTarget::BuiltIn),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            builtin.workspace,
+            Some(WorkspaceSelector::Index(0)),
+            "the built-in display falls through to the display-agnostic rule"
         );
     }
 

@@ -134,6 +134,14 @@ pub struct AppWorkspaceRule {
     /// Optional: Regular expression to match the accessibility identifier
     /// reported by AXIdentifier.
     pub ax_identifier_regex: Option<String>,
+
+    /// Optional: restrict the rule to the display the window is on.
+    /// Accepts the same targets as `workspace_display_rules`:
+    /// "built_in" or "external_primary". When omitted, the rule matches on
+    /// every display. A window on a non-primary external display does not
+    /// match an "external_primary" rule.
+    #[serde(default)]
+    pub display: Option<WorkspaceDisplayTarget>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
@@ -2261,6 +2269,7 @@ mod tests {
             ax_role: None,
             ax_subrole: None,
             ax_identifier_regex: None,
+            display: None,
         });
 
         let issues = settings.validate();

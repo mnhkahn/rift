@@ -148,6 +148,7 @@ pub(crate) fn assign_window(
     wid: WindowId,
     space: SpaceId,
     app_info: Option<&AppInfo>,
+    display: Option<crate::common::config::WorkspaceDisplayTarget>,
 ) -> (Option<AppRuleEffects>, Option<LayoutEvent>) {
     let result = if let Some(window) = state.windows.window(wid) {
         let (title, role, subrole, identifier) = (
@@ -167,6 +168,7 @@ pub(crate) fn assign_window(
                 ax_role: role.as_deref(),
                 ax_subrole: subrole.as_deref(),
                 ax_identifier: identifier.as_deref(),
+                display,
             },
         )
     } else {
@@ -194,6 +196,8 @@ pub(crate) struct EmitLayoutPayload<'a> {
     // Authoritative ownership and location allowing geometry fallback, respectively.
     pub(crate) window_spaces: HashMap<WindowId, (Option<SpaceId>, Option<SpaceId>)>,
     pub(crate) active_spaces: Vec<SpaceId>,
+    /// Display class of each active space, used by display-restricted app rules.
+    pub(crate) space_display_targets: &'a HashMap<SpaceId, crate::common::config::WorkspaceDisplayTarget>,
     pub(crate) focused_window: Option<(SpaceId, WindowId)>,
 }
 
@@ -208,6 +212,7 @@ pub(crate) fn emit_layout_events(
         app_info,
         window_spaces,
         active_spaces,
+        space_display_targets,
         focused_window,
     } = payload;
     let mut outcome = crate::actor::reactor::events::EventOutcome::default();
@@ -261,7 +266,9 @@ pub(crate) fn emit_layout_events(
     for (space, mut windows_for_space) in app_windows {
         windows_for_space.sort_unstable();
         for wid in windows_for_space {
-            let (effects, removal) = assign_window(state, layout, wid, space, app_info.as_ref());
+            let display = space_display_targets.get(&space).copied();
+            let (effects, removal) =
+                assign_window(state, layout, wid, space, app_info.as_ref(), display);
             if let Some(event) = removal {
                 outcome = outcome.with_layout_event(event);
             }

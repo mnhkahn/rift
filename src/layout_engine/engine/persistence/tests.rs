@@ -150,6 +150,7 @@ fn restored_workspace_is_resolved_before_app_rule_assignment() {
                 ax_role: None,
                 ax_subrole: None,
                 ax_identifier: None,
+                display: None,
             },
         )
         .unwrap();
